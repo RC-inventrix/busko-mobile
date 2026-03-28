@@ -68,9 +68,10 @@ class _DriverScreenState extends State<DriverScreen> {
       _statusMessage = 'Connecting to server...';
     });
 
+    // --- UPDATED AWS SERVER URL BELOW ---
     _stompClient = StompClient(
       config: StompConfig(
-        url: 'ws://192.168.8.157:8080/ws',
+        url: 'ws://13.234.111.229:8080/ws',
         onConnect: _onStompConnect,
         onWebSocketError: (dynamic error) {
           if (mounted) {
@@ -112,7 +113,7 @@ class _DriverScreenState extends State<DriverScreen> {
     _positionSubscription = Geolocator.getPositionStream(
       locationSettings: locationSettings,
     ).listen(
-      (Position position) {
+          (Position position) {
         final payload = jsonEncode({
           'lat': position.latitude,
           'lng': position.longitude,
@@ -128,7 +129,7 @@ class _DriverScreenState extends State<DriverScreen> {
         if (mounted) {
           setState(() {
             _statusMessage =
-                'lat=${position.latitude.toStringAsFixed(5)}, '
+            'lat=${position.latitude.toStringAsFixed(5)}, '
                 'lng=${position.longitude.toStringAsFixed(5)}';
           });
         }
@@ -184,8 +185,8 @@ class _DriverScreenState extends State<DriverScreen> {
             Text(
               _isOnline ? 'Online' : 'Offline',
               style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                    color: _isOnline ? Colors.green : Colors.grey,
-                  ),
+                color: _isOnline ? Colors.green : Colors.grey,
+              ),
             ),
             const SizedBox(height: 16),
             Padding(
