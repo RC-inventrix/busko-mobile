@@ -70,7 +70,7 @@ class _DriverScreenState extends State<DriverScreen> {
 
     _stompClient = StompClient(
       config: StompConfig(
-        url: 'ws://10.0.2.2:8080/ws',
+        url: 'ws://192.168.8.157:8080/ws',
         onConnect: _onStompConnect,
         onWebSocketError: (dynamic error) {
           if (mounted) {
@@ -116,6 +116,8 @@ class _DriverScreenState extends State<DriverScreen> {
         final payload = jsonEncode({
           'lat': position.latitude,
           'lng': position.longitude,
+          'busId': 1,      // Add this!
+          'routeId': 1     // Add this!
         });
 
         _stompClient?.send(
