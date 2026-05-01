@@ -3,9 +3,16 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:stomp_dart_client/stomp_dart_client.dart';
 
-void main() {
+Future<void> main() async {
+  // Ensure Flutter is initialized before loading the env file
+  WidgetsFlutterBinding.ensureInitialized();
+
+  // Load the environment variables
+  await dotenv.load(fileName: ".env");
+
   runApp(const DriverApp());
 }
 
@@ -68,10 +75,10 @@ class _DriverScreenState extends State<DriverScreen> {
       _statusMessage = 'Connecting to server...';
     });
 
-    // --- UPDATED AWS SERVER URL BELOW ---
+    // --- UPDATED TO USE DOTENV CONFIGURATION BELOW ---
     _stompClient = StompClient(
       config: StompConfig(
-        url: 'ws://192.168.8.157:8080/ws',
+        url: dotenv.env['WS_SERVER_URL'] ?? '',
         onConnect: _onStompConnect,
         onWebSocketError: (dynamic error) {
           if (mounted) {
