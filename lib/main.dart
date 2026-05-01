@@ -71,7 +71,7 @@ class _DriverScreenState extends State<DriverScreen> {
     // --- UPDATED AWS SERVER URL BELOW ---
     _stompClient = StompClient(
       config: StompConfig(
-        url: 'ws://13.234.111.229:8080/ws',
+        url: 'ws://192.168.8.157:8080/ws',
         onConnect: _onStompConnect,
         onWebSocketError: (dynamic error) {
           if (mounted) {
