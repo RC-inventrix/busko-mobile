@@ -1,18 +1,10 @@
-import 'dart:async';
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
-import 'package:geolocator/geolocator.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
-import 'package:stomp_dart_client/stomp_dart_client.dart';
+import 'screens/setup_screen.dart'; // Import the starting screen
 
 Future<void> main() async {
-  // Ensure Flutter is initialized before loading the env file
   WidgetsFlutterBinding.ensureInitialized();
-
-  // Load the environment variables
   await dotenv.load(fileName: ".env");
-
   runApp(const DriverApp());
 }
 
@@ -22,205 +14,25 @@ class DriverApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Busko Driver',
+      title: 'BusKo Driver',
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFF1D5A94), // BusKo Blue
+          primary: const Color(0xFF1D5A94),
+          secondary: const Color(0xFFF28F20), // BusKo Orange
+        ),
         useMaterial3: true,
-      ),
-      home: const DriverScreen(),
-    );
-  }
-}
-
-class DriverScreen extends StatefulWidget {
-  const DriverScreen({super.key});
-
-  @override
-  State<DriverScreen> createState() => _DriverScreenState();
-}
-
-class _DriverScreenState extends State<DriverScreen> {
-  bool _isOnline = false;
-  String _statusMessage = 'Press Go Online to start';
-  StompClient? _stompClient;
-  StreamSubscription<Position>? _positionSubscription;
-
-  @override
-  void dispose() {
-    _goOffline();
-    super.dispose();
-  }
-
-  Future<void> _goOnline() async {
-    LocationPermission permission = await Geolocator.checkPermission();
-    if (permission == LocationPermission.denied) {
-      permission = await Geolocator.requestPermission();
-      if (permission == LocationPermission.denied) {
-        setState(() {
-          _statusMessage = 'Location permission denied';
-        });
-        return;
-      }
-    }
-
-    if (permission == LocationPermission.deniedForever) {
-      setState(() {
-        _statusMessage = 'Location permission permanently denied';
-      });
-      return;
-    }
-
-    setState(() {
-      _isOnline = true;
-      _statusMessage = 'Connecting to server...';
-    });
-
-    // --- UPDATED TO USE DOTENV CONFIGURATION BELOW ---
-    _stompClient = StompClient(
-      config: StompConfig(
-        url: dotenv.env['WS_SERVER_URL'] ?? '',
-        onConnect: _onStompConnect,
-        onWebSocketError: (dynamic error) {
-          if (mounted) {
-            setState(() {
-              _statusMessage = 'WebSocket error: $error';
-            });
-          }
-        },
-        onDisconnect: (frame) {
-          if (mounted) {
-            setState(() {
-              _statusMessage = 'Disconnected from server';
-            });
-          }
-        },
-        onStompError: (frame) {
-          if (mounted) {
-            setState(() {
-              _statusMessage = 'STOMP error: ${frame.body}';
-            });
-          }
-        },
-      ),
-    );
-    _stompClient!.activate();
-  }
-
-  void _onStompConnect(StompFrame frame) {
-    if (!mounted) return;
-    setState(() {
-      _statusMessage = 'Connected. Waiting for GPS...';
-    });
-
-    const locationSettings = LocationSettings(
-      accuracy: LocationAccuracy.high,
-      distanceFilter: 0,
-    );
-
-    _positionSubscription = Geolocator.getPositionStream(
-      locationSettings: locationSettings,
-    ).listen(
-          (Position position) {
-        final payload = jsonEncode({
-          'lat': position.latitude,
-          'lng': position.longitude,
-          'busId': 1,      // Add this!
-          'routeId': 1     // Add this!
-        });
-
-        _stompClient?.send(
-          destination: '/app/driver/update',
-          body: payload,
-        );
-
-        if (mounted) {
-          setState(() {
-            _statusMessage =
-            'lat=${position.latitude.toStringAsFixed(5)}, '
-                'lng=${position.longitude.toStringAsFixed(5)}';
-          });
-        }
-      },
-      onError: (dynamic error) {
-        if (mounted) {
-          setState(() {
-            _statusMessage = 'GPS error: $error';
-          });
-        }
-      },
-    );
-  }
-
-  void _goOffline() {
-    _positionSubscription?.cancel();
-    _positionSubscription = null;
-    _stompClient?.deactivate();
-    _stompClient = null;
-    if (mounted) {
-      setState(() {
-        _isOnline = false;
-        _statusMessage = 'Press Go Online to start';
-      });
-    }
-  }
-
-  void _toggleOnlineStatus() {
-    if (_isOnline) {
-      _goOffline();
-    } else {
-      _goOnline();
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        title: const Text('Driver Interface'),
-      ),
-      body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              _isOnline ? Icons.location_on : Icons.location_off,
-              size: 80,
-              color: _isOnline ? Colors.green : Colors.grey,
-            ),
-            const SizedBox(height: 24),
-            Text(
-              _isOnline ? 'Online' : 'Offline',
-              style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                color: _isOnline ? Colors.green : Colors.grey,
-              ),
-            ),
-            const SizedBox(height: 16),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 32),
-              child: Text(
-                _statusMessage,
-                textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.bodyMedium,
-              ),
-            ),
-            const SizedBox(height: 40),
-            ElevatedButton(
-              onPressed: _toggleOnlineStatus,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: _isOnline ? Colors.red : Colors.green,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 48,
-                  vertical: 16,
-                ),
-                textStyle: const TextStyle(fontSize: 20),
-              ),
-              child: Text(_isOnline ? 'Go Offline' : 'Go Online'),
-            ),
-          ],
+        inputDecorationTheme: InputDecorationTheme(
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: const BorderSide(color: Color(0xFF1D5A94), width: 2),
+          ),
         ),
       ),
+      home: const DriverSetupScreen(),
     );
   }
 }
