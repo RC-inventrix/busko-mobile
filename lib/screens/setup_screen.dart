@@ -1,5 +1,26 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import 'broadcast_screen.dart'; // Import the screen we navigate to
+
+// --- Simple Model for the Route Data ---
+class RouteModel {
+  final int id;
+  final String routeNumber;
+  final String startLocation;
+  final String endLocation;
+
+  RouteModel({required this.id, required this.routeNumber, required this.startLocation, required this.endLocation});
+
+  factory RouteModel.fromJson(Map<String, dynamic> json) {
+    return RouteModel(
+      id: json['id'],
+      routeNumber: json['routeNumber'],
+      startLocation: json['startLocation'],
+      endLocation: json['endLocation'],
+    );
+  }
+}
 
 class DriverSetupScreen extends StatefulWidget {
   const DriverSetupScreen({super.key});
@@ -9,51 +30,103 @@ class DriverSetupScreen extends StatefulWidget {
 }
 
 class _DriverSetupScreenState extends State<DriverSetupScreen> {
-  final TextEditingController _routeNumberController = TextEditingController();
-  String? _selectedDirection;
+  final String backendUrl = 'http://10.0.2.2:8080'; // Change to your AWS IP later
+
   bool _isLoading = false;
 
-  final List<String> _directions = [
-    'Start to End (Forward)',
-    'End to Start (Return)',
-  ];
+  // State variables for the cascading selection
+  List<RouteModel> _fetchedRoutes = [];
+  String? _selectedRouteNumber;
+  String? _selectedStartLocation;
+  String? _selectedEndLocation;
+  RouteModel? _finalSelectedRoute;
 
+  // 1. Fetch autocomplete suggestions from Spring Boot
+  Future<List<String>> _searchRouteNumbers(String query) async {
+    if (query.isEmpty) return [];
+
+    try {
+      final response = await http.get(Uri.parse('$backendUrl/api/routes/search?query=$query'));
+      if (response.statusCode == 200) {
+        List<dynamic> data = json.decode(response.body);
+        _fetchedRoutes = data.map((json) => RouteModel.fromJson(json)).toList();
+
+        // Return only unique route numbers for the first dropdown
+        return _fetchedRoutes.map((r) => r.routeNumber).toSet().toList();
+      }
+    } catch (e) {
+      debugPrint('Error fetching routes: $e');
+    }
+    return [];
+  }
+
+  // 2. Start the shift and create the Bus record
   Future<void> _startShift() async {
-    if (_routeNumberController.text.isEmpty || _selectedDirection == null) {
+    if (_finalSelectedRoute == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please fill all fields')),
+        const SnackBar(content: Text('Please complete route selection')),
       );
       return;
     }
 
-    setState(() {
-      _isLoading = true;
-    });
+    setState(() => _isLoading = true);
 
-    // Simulating backend API call for /api/driver/startShift
-    await Future.delayed(const Duration(seconds: 1));
-    int generatedBusId = DateTime.now().millisecondsSinceEpoch % 1000;
-    int selectedRouteId = int.tryParse(_routeNumberController.text) ?? 1;
-
-    if (mounted) {
-      setState(() {
-        _isLoading = false;
-      });
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(
-          builder: (context) => DriverScreen(
-            busId: generatedBusId,
-            routeId: selectedRouteId,
-            routeDisplay: _routeNumberController.text,
-          ),
-        ),
+    try {
+      // Create the Bus record in the backend
+      final response = await http.post(
+        Uri.parse('$backendUrl/api/buses/start?routeId=${_finalSelectedRoute!.id}'),
       );
+
+      if (response.statusCode == 200) {
+        final busData = json.decode(response.body);
+        final generatedBusId = busData['id'];
+
+        if (mounted) {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(
+              builder: (context) => DriverScreen(
+                busId: generatedBusId,
+                routeId: _finalSelectedRoute!.id,
+                routeDisplay: '${_finalSelectedRoute!.routeNumber}: ${_finalSelectedRoute!.startLocation} to ${_finalSelectedRoute!.endLocation}',
+              ),
+            ),
+          );
+        }
+      } else {
+        throw Exception('Failed to create bus');
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error starting shift: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    // Filter available start locations based on selected route number
+    List<String> availableStartLocations = _selectedRouteNumber == null
+        ? []
+        : _fetchedRoutes
+        .where((r) => r.routeNumber == _selectedRouteNumber)
+        .map((r) => r.startLocation)
+        .toSet()
+        .toList();
+
+    // Filter available end locations based on selected route number AND start location
+    List<String> availableEndLocations = _selectedStartLocation == null
+        ? []
+        : _fetchedRoutes
+        .where((r) => r.routeNumber == _selectedRouteNumber && r.startLocation == _selectedStartLocation)
+        .map((r) => r.endLocation)
+        .toSet()
+        .toList();
+
     return Scaffold(
       backgroundColor: Colors.white,
       body: SafeArea(
@@ -78,62 +151,94 @@ class _DriverSetupScreenState extends State<DriverSetupScreen> {
                 ),
                 textAlign: TextAlign.center,
               ),
-              const SizedBox(height: 8),
-              Text(
-                'Enter your route details to begin broadcasting.',
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: Colors.grey[600],
-                ),
-                textAlign: TextAlign.center,
-              ),
               const SizedBox(height: 40),
-              TextField(
-                controller: _routeNumberController,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(
-                  labelText: 'Route Number',
-                  prefixIcon: Icon(Icons.directions_bus),
-                  hintText: 'e.g. 138',
-                ),
+
+              // 1. Route Number Autocomplete
+              Autocomplete<String>(
+                optionsBuilder: (TextEditingValue textEditingValue) {
+                  return _searchRouteNumbers(textEditingValue.text);
+                },
+                onSelected: (String selection) {
+                  setState(() {
+                    _selectedRouteNumber = selection;
+                    _selectedStartLocation = null; // Reset children
+                    _selectedEndLocation = null;
+                    _finalSelectedRoute = null;
+                  });
+                },
+                fieldViewBuilder: (context, controller, focusNode, onEditingComplete) {
+                  return TextField(
+                    controller: controller,
+                    focusNode: focusNode,
+                    decoration: const InputDecoration(
+                      labelText: 'Search Route Number',
+                      prefixIcon: Icon(Icons.search),
+                      hintText: 'e.g. 138',
+                    ),
+                  );
+                },
               ),
               const SizedBox(height: 24),
+
+              // 2. Start Location Dropdown
               DropdownButtonFormField<String>(
                 decoration: const InputDecoration(
-                  labelText: 'Direction',
-                  prefixIcon: Icon(Icons.swap_calls),
+                  labelText: 'Start Location',
+                  prefixIcon: Icon(Icons.location_on),
                 ),
-                value: _selectedDirection,
-                items: _directions.map((String direction) {
-                  return DropdownMenuItem(
-                    value: direction,
-                    child: Text(direction),
-                  );
+                value: _selectedStartLocation,
+                items: availableStartLocations.map((String location) {
+                  return DropdownMenuItem(value: location, child: Text(location));
                 }).toList(),
-                onChanged: (String? newValue) {
+                onChanged: _selectedRouteNumber == null ? null : (String? newValue) {
                   setState(() {
-                    _selectedDirection = newValue;
+                    _selectedStartLocation = newValue;
+                    _selectedEndLocation = null; // Reset child
+                    _finalSelectedRoute = null;
+                  });
+                },
+              ),
+              const SizedBox(height: 24),
+
+              // 3. End Location Dropdown
+              DropdownButtonFormField<String>(
+                decoration: const InputDecoration(
+                  labelText: 'End Location',
+                  prefixIcon: Icon(Icons.flag),
+                ),
+                value: _selectedEndLocation,
+                items: availableEndLocations.map((String location) {
+                  return DropdownMenuItem(value: location, child: Text(location));
+                }).toList(),
+                onChanged: _selectedStartLocation == null ? null : (String? newValue) {
+                  setState(() {
+                    _selectedEndLocation = newValue;
+                    // Find the exact route object now that we have all three pieces of info
+                    _finalSelectedRoute = _fetchedRoutes.firstWhere(
+                            (r) => r.routeNumber == _selectedRouteNumber &&
+                            r.startLocation == _selectedStartLocation &&
+                            r.endLocation == _selectedEndLocation
+                    );
                   });
                 },
               ),
               const SizedBox(height: 48),
+
+              // 4. Save & Start Button
               SizedBox(
                 height: 56,
                 child: ElevatedButton(
-                  onPressed: _isLoading ? null : _startShift,
+                  onPressed: (_isLoading || _finalSelectedRoute == null) ? null : _startShift,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Theme.of(context).colorScheme.secondary,
                     foregroundColor: Colors.white,
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
                     ),
-                    textStyle: const TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                    ),
                   ),
                   child: _isLoading
                       ? const CircularProgressIndicator(color: Colors.white)
-                      : const Text('Start Shift'),
+                      : const Text('Start Shift', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                 ),
               ),
             ],
