@@ -3,15 +3,14 @@ import 'dart:convert';
 import 'dart:math';
 import 'dart:ui' as ui; // NEW: Used to draw custom passenger numbers!
 import 'package:flutter/material.dart';
+import 'route_data.dart';
 import 'package:flutter/foundation.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
-import 'package:flutter_polyline_points/flutter_polyline_points.dart';
 import 'package:stomp_dart_client/stomp_dart_client.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'package:permission_handler/permission_handler.dart';
 
 class MapScreen extends StatefulWidget {
   final int busId;
@@ -37,9 +36,9 @@ class _MapScreenState extends State<MapScreen> {
   GoogleMapController? _mapController;
   Set<Polyline> _polylines = {};
 
-  // Set initial camera to the new Keells Angoda start point
+  // Set initial camera to the new starting point
   static const CameraPosition _initialPosition = CameraPosition(
-    target: LatLng(6.9324, 79.9272),
+    target: LatLng(6.91125032, 79.88253926),
     zoom: 14.5,
   );
 
@@ -50,30 +49,11 @@ class _MapScreenState extends State<MapScreen> {
   ]
   ''';
 
-  // --- ROUTE START & END (Angoda -> BLC) ---
-  // Start: Keells Angoda | End: Buddhist Ladies' College
-  static const LatLng _origin = LatLng(6.9324314, 79.9271855);
-  static const LatLng _destination = LatLng(6.9168348, 79.8628017);
+  // --- ROUTE START & END ---
+  static const LatLng _origin = LatLng(6.91125032, 79.88253926);
+  static const LatLng _destination = LatLng(6.92233663, 79.89160939);
 
   bool _isLoadingRoute = true;
-
-  // Hardcoded fallback route in case the Directions API is unavailable
-  final List<LatLng> _fallbackRoutePoints = const [
-    LatLng(6.9324, 79.9272), // Keells Angoda (start)
-    LatLng(6.9340, 79.9205),
-    LatLng(6.9352, 79.9141),
-    LatLng(6.9358, 79.9073),
-    LatLng(6.9347, 79.9008),
-    LatLng(6.9326, 79.8945),
-    LatLng(6.9298, 79.8892),
-    LatLng(6.9267, 79.8846),
-    LatLng(6.9238, 79.8802),
-    LatLng(6.9214, 79.8755),
-    LatLng(6.9195, 79.8710),
-    LatLng(6.9182, 79.8671),
-    LatLng(6.9171, 79.8644),
-    LatLng(6.9165, 79.8626), // Buddhist Ladies' College (end)
-  ];
 
   // --- PRESENTATION SIMULATION STATE ---
   List<LatLng> _masterRoute = [];
@@ -115,70 +95,14 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   // ==========================================
-  // 1. FETCH REAL ROAD ROUTE VIA GOOGLE DIRECTIONS API
+  // 1. FETCH REAL ROAD ROUTE VIA STATIC COORDINATES
   // ==========================================
   Future<void> _fetchRealRoute() async {
     setState(() => _isLoadingRoute = true);
 
-    final String apiKey = dotenv.env['GOOGLE_MAPS_API_KEY'] ?? '';
-
-    bool apiSucceeded = false;
-
-    if (apiKey.isNotEmpty) {
-      try {
-        PolylinePoints polylinePoints = PolylinePoints();
-
-        // Try transit mode first (bus route)
-        PolylineResult result = await polylinePoints.getRouteBetweenCoordinates(
-          googleApiKey: apiKey,
-          request: PolylineRequest(
-            origin: PointLatLng(_origin.latitude, _origin.longitude),
-            destination: PointLatLng(_destination.latitude, _destination.longitude),
-            mode: TravelMode.transit,
-          ),
-        );
-
-        if (result.points.isNotEmpty) {
-          _masterRoute = result.points
-              .map((p) => LatLng(p.latitude, p.longitude))
-              .toList();
-          debugPrint('Directions API (transit) returned ${_masterRoute.length} road-snapped points');
-          apiSucceeded = true;
-        } else {
-          debugPrint('Transit mode returned no points: ${result.errorMessage}');
-
-          // Fallback: try driving mode
-          PolylineResult fallback = await polylinePoints.getRouteBetweenCoordinates(
-            googleApiKey: apiKey,
-            request: PolylineRequest(
-              origin: PointLatLng(_origin.latitude, _origin.longitude),
-              destination: PointLatLng(_destination.latitude, _destination.longitude),
-              mode: TravelMode.driving,
-            ),
-          );
-
-          if (fallback.points.isNotEmpty) {
-            _masterRoute = fallback.points
-                .map((p) => LatLng(p.latitude, p.longitude))
-                .toList();
-            debugPrint('Driving fallback returned ${_masterRoute.length} points');
-            apiSucceeded = true;
-          } else {
-            debugPrint('Driving fallback also failed: ${fallback.errorMessage}');
-          }
-        }
-      } catch (e) {
-        debugPrint('Error fetching route from Directions API: $e');
-      }
-    } else {
-      debugPrint('WARNING: GOOGLE_MAPS_API_KEY not found in .env');
-    }
-
-    // ── FALLBACK: use hardcoded route if API failed ──
-    if (!apiSucceeded) {
-      debugPrint('Using hardcoded fallback route (${_fallbackRoutePoints.length} base points)');
-      _masterRoute = _interpolateRoute(_fallbackRoutePoints);
-    }
+    // Using the explicitly provided coordinates from route_data.dart
+    // This perfectly snaps to the road as requested.
+    _masterRoute = List.from(staticRouteCoordinates);
 
     if (!mounted) return;
 
@@ -193,23 +117,6 @@ class _MapScreenState extends State<MapScreen> {
         icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
       );
     });
-  }
-
-  /// Generates smooth interpolated points between base waypoints
-  List<LatLng> _interpolateRoute(List<LatLng> basePoints) {
-    List<LatLng> smooth = [];
-    for (int i = 0; i < basePoints.length - 1; i++) {
-      LatLng p1 = basePoints[i];
-      LatLng p2 = basePoints[i + 1];
-      int steps = 20;
-      for (int j = 0; j < steps; j++) {
-        double lat = p1.latitude + (p2.latitude - p1.latitude) * (j / steps);
-        double lng = p1.longitude + (p2.longitude - p1.longitude) * (j / steps);
-        smooth.add(LatLng(lat, lng));
-      }
-    }
-    smooth.add(basePoints.last);
-    return smooth;
   }
 
   void _updatePolyline() {
