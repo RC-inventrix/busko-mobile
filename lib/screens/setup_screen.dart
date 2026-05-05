@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart'; // Local storage for registration
 import 'broadcast_screen.dart'; // Import the screen we navigate to
 
 // --- Simple Model for the Route Data ---
@@ -10,7 +11,12 @@ class RouteModel {
   final String startLocation;
   final String endLocation;
 
-  RouteModel({required this.id, required this.routeNumber, required this.startLocation, required this.endLocation});
+  RouteModel({
+    required this.id,
+    required this.routeNumber,
+    required this.startLocation,
+    required this.endLocation,
+  });
 
   factory RouteModel.fromJson(Map<String, dynamic> json) {
     return RouteModel(
@@ -30,9 +36,11 @@ class DriverSetupScreen extends StatefulWidget {
 }
 
 class _DriverSetupScreenState extends State<DriverSetupScreen> {
-  final String backendUrl = 'http://10.0.2.2:8080'; // Change to your AWS IP later
+  final String backendUrl = 'http://10.0.2.2:8080'; // Localhost for Android Emulator
 
   bool _isLoading = false;
+  bool _isSearching = false; // Tracks API loading state
+  String? _routeSearchError; // Shows validation errors in the UI
 
   // State variables for the cascading selection
   List<RouteModel> _fetchedRoutes = [];
@@ -43,19 +51,44 @@ class _DriverSetupScreenState extends State<DriverSetupScreen> {
 
   // 1. Fetch autocomplete suggestions from Spring Boot
   Future<List<String>> _searchRouteNumbers(String query) async {
-    if (query.isEmpty) return [];
+    if (query.isEmpty) {
+      setState(() => _routeSearchError = null);
+      return [];
+    }
+
+    setState(() {
+      _isSearching = true;
+      _routeSearchError = null;
+    });
 
     try {
       final response = await http.get(Uri.parse('$backendUrl/api/routes/search?query=$query'));
+
       if (response.statusCode == 200) {
         List<dynamic> data = json.decode(response.body);
         _fetchedRoutes = data.map((json) => RouteModel.fromJson(json)).toList();
 
         // Return only unique route numbers for the first dropdown
-        return _fetchedRoutes.map((r) => r.routeNumber).toSet().toList();
+        final uniqueRoutes = _fetchedRoutes.map((r) => r.routeNumber).toSet().toList();
+
+        setState(() {
+          if (uniqueRoutes.isEmpty) {
+            _routeSearchError = 'Route not found';
+          } else {
+            _routeSearchError = null;
+          }
+        });
+
+        return uniqueRoutes;
+      } else {
+        setState(() => _routeSearchError = 'Server error (${response.statusCode})');
+        debugPrint('Backend rejected request. Status: ${response.statusCode}, Body: ${response.body}');
       }
     } catch (e) {
       debugPrint('Error fetching routes: $e');
+      setState(() => _routeSearchError = 'Network error. Backend unreachable.');
+    } finally {
+      if (mounted) setState(() => _isSearching = false);
     }
     return [];
   }
@@ -80,6 +113,13 @@ class _DriverSetupScreenState extends State<DriverSetupScreen> {
       if (response.statusCode == 200) {
         final busData = json.decode(response.body);
         final generatedBusId = busData['id'];
+        final displayString = '${_finalSelectedRoute!.routeNumber}: ${_finalSelectedRoute!.startLocation} to ${_finalSelectedRoute!.endLocation}';
+
+        // --- NEW LOGIC: Save the identifiers to the phone's hard drive ---
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setInt('busId', generatedBusId);
+        await prefs.setInt('routeId', _finalSelectedRoute!.id);
+        await prefs.setString('routeDisplay', displayString);
 
         if (mounted) {
           Navigator.pushReplacement(
@@ -88,13 +128,13 @@ class _DriverSetupScreenState extends State<DriverSetupScreen> {
               builder: (context) => DriverScreen(
                 busId: generatedBusId,
                 routeId: _finalSelectedRoute!.id,
-                routeDisplay: '${_finalSelectedRoute!.routeNumber}: ${_finalSelectedRoute!.startLocation} to ${_finalSelectedRoute!.endLocation}',
+                routeDisplay: displayString,
               ),
             ),
           );
         }
       } else {
-        throw Exception('Failed to create bus');
+        throw Exception('Failed to create bus. Status: ${response.statusCode}');
       }
     } catch (e) {
       if (mounted) {
@@ -164,16 +204,39 @@ class _DriverSetupScreenState extends State<DriverSetupScreen> {
                     _selectedStartLocation = null; // Reset children
                     _selectedEndLocation = null;
                     _finalSelectedRoute = null;
+                    _routeSearchError = null; // Clear error upon valid selection
                   });
                 },
                 fieldViewBuilder: (context, controller, focusNode, onEditingComplete) {
                   return TextField(
                     controller: controller,
                     focusNode: focusNode,
-                    decoration: const InputDecoration(
+                    onChanged: (value) {
+                      // IF the user modifies the text after selecting, completely reset the cascade
+                      if (_selectedRouteNumber != null) {
+                        setState(() {
+                          _selectedRouteNumber = null;
+                          _selectedStartLocation = null;
+                          _selectedEndLocation = null;
+                          _finalSelectedRoute = null;
+                        });
+                      }
+                    },
+                    decoration: InputDecoration(
                       labelText: 'Search Route Number',
-                      prefixIcon: Icon(Icons.search),
+                      prefixIcon: const Icon(Icons.search),
                       hintText: 'e.g. 138',
+                      errorText: _routeSearchError, // Will turn red if route is invalid
+                      suffixIcon: _isSearching
+                          ? const Padding(
+                        padding: EdgeInsets.all(12.0),
+                        child: SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      )
+                          : null,
                     ),
                   );
                 },

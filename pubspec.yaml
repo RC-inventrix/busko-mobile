@@ -15,6 +15,14 @@ dependencies:
   stomp_dart_client: ^3.0.1
   flutter_dotenv: ^6.0.1
   http: ^1.6.0
+  shared_preferences: ^2.5.5
+  connectivity_plus: ^7.1.1
+  flutter_local_notifications: ^21.0.0
+  permission_handler: ^12.0.1
+  # --- NEW DEPENDENCIES FOR LIVE MAP NAVIGATION ---
+  google_maps_flutter: ^2.10.0
+  flutter_polyline_points: ^2.1.0
+  maps_toolkit: ^3.0.0
 
 dev_dependencies:
   flutter_test:
